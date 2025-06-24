@@ -240,6 +240,10 @@ def generate_csv():
                 
             logger.debug(f"Processing product {idx}: {product_data.get('name', 'Unnamed')} (SKU: {product_data.get('sku', 'N/A')})")
                 
+            # Ensure sizes are unique and properly formatted
+            unique_sizes = list(dict.fromkeys(data['sizes']))  # Remove duplicates while preserving order
+            size_values = '|'.join(unique_sizes)
+            
             # Create a base product (parent)
             base_product = WooCommerceProduct(
                 name=product_data.get('name', 'Product'),
@@ -250,7 +254,7 @@ def generate_csv():
                 images=product_data.get('image', ''),
                 type='variable',
                 attribute_1_name='Size',
-                attribute_1_values='|'.join(data['sizes']),
+                attribute_1_values=size_values,
                 attribute_1_visible='1',
                 attribute_1_global='0'
             )
@@ -258,8 +262,8 @@ def generate_csv():
             # Add the parent product
             products_with_variations.append(base_product)
             
-            # Create variations for each size
-            for size in data['sizes']:
+            # Create variations for each unique size
+            for size in unique_sizes:
                 variation = WooCommerceProduct(
                     name=f"{product_data.get('name', 'Product')} - {size}",
                     sku=f"{product_data.get('sku', '')}-{size}",
