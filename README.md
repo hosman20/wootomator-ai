@@ -28,7 +28,7 @@ A Flask web application that processes product images using Google Gemini AI to 
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/wootomator-ai.git
+   git clone https://github.com/hosman20/wootomator-ai.git
    cd wootomator-ai
    ```
 
