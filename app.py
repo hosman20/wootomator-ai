@@ -3,9 +3,10 @@
 WooCommerce Product Data Extractor - Web Interface
 """
 import os
+import sys
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash
 from werkzeug.utils import secure_filename
-from wootomator import process_image_urls, WooCommerceCSVExporter
+from wootomator import process_image_urls, WooCommerceCSVExporter, WooCommerceProduct
 from dotenv import load_dotenv
 import logging
 from datetime import datetime
@@ -36,13 +37,40 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-key-change-in-production')
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
+# Configure upload folder
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+def ensure_upload_directory():
+    """Ensure the upload directory exists and has the correct permissions."""
+    try:
+        # Create the directory if it doesn't exist
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+        
+        # Set permissions (read/write/execute for owner, read/execute for group/others)
+        os.chmod(UPLOAD_FOLDER, 0o755)
+        
+        # Verify we can write to the directory
+        test_file = os.path.join(UPLOAD_FOLDER, '.permission_test')
+        with open(test_file, 'w') as f:
+            f.write('test')
+        os.remove(test_file)
+        
+        logger.info(f"Upload directory verified and ready: {UPLOAD_FOLDER}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to initialize upload directory {UPLOAD_FOLDER}: {str(e)}", exc_info=True)
+        return False
+
+# Ensure upload directory is ready
+if not ensure_upload_directory():
+    logger.critical("FATAL: Could not initialize upload directory. Check permissions and try again.")
+    sys.exit(1)
+
 # Add context processor to make current datetime available in all templates
 @app.context_processor
 def inject_now():
     return {'now': datetime.now()}
-
-# Ensure upload folder exists
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {'txt'}
@@ -169,76 +197,91 @@ def process():
 @app.route('/generate_csv', methods=['POST'])
 def generate_csv():
     logger.info("Processing request to /generate_csv endpoint")
+    logger.debug(f"Request headers: {dict(request.headers)}")
+    logger.debug(f"Request data length: {len(request.data) if request.data else 0}")
     
     if not request.is_json:
+        error_msg = 'Request must be JSON'
+        logger.error(error_msg)
         return jsonify({
             'success': False,
-            'error': 'Request must be JSON'
-        }), 400
-    
-    data = request.get_json()
-    
-    # Validate required fields
-    if 'products' not in data or not isinstance(data['products'], list):
-        return jsonify({
-            'success': False,
-            'error': 'Products data is required and must be an array'
-        }), 400
-    
-    if 'sizes' not in data or not isinstance(data['sizes'], list) or not data['sizes']:
-        return jsonify({
-            'success': False,
-            'error': 'At least one size must be selected'
+            'error': error_msg
         }), 400
     
     try:
+        data = request.get_json()
+        logger.debug(f"Received data: {json.dumps(data, indent=2) if data else 'No data'}")
+        
+        # Validate required fields
+        if 'products' not in data or not isinstance(data['products'], list):
+            error_msg = 'Products data is required and must be an array'
+            logger.error(error_msg)
+            return jsonify({
+                'success': False,
+                'error': error_msg
+            }), 400
+        
+        if 'sizes' not in data or not isinstance(data['sizes'], list) or not data['sizes']:
+            error_msg = 'At least one size must be selected'
+            logger.error(error_msg)
+            return jsonify({
+                'success': False,
+                'error': error_msg
+            }), 400
+        
         # Create product variations for each size
         products_with_variations = []
+        logger.info(f"Processing {len(data['products'])} products with sizes: {', '.join(data['sizes'])}")
         
-        for product_data in data['products']:
+        for idx, product_data in enumerate(data['products'], 1):
             if not isinstance(product_data, dict) or 'sku' not in product_data:
+                logger.warning(f"Skipping invalid product at index {idx}: {product_data}")
                 continue
                 
+            logger.debug(f"Processing product {idx}: {product_data.get('name', 'Unnamed')} (SKU: {product_data.get('sku', 'N/A')})")
+                
             # Create a base product (parent)
-            base_product = type('Product', (), {
-                'name': product_data.get('name', 'Product'),
-                'sku': product_data.get('sku', ''),
-                'regular_price': product_data.get('regular_price', '0.00'),
-                'sale_price': product_data.get('sale_price', ''),
-                'short_description': product_data.get('short_description', ''),
-                'images': product_data.get('image', ''),
-                'type': 'variable',
-                'attribute_1_name': 'Size',
-                'attribute_1_values': '|'.join(data['sizes']),
-                'attribute_1_visible': '1',
-                'attribute_1_global': '0'
-            })
+            base_product = WooCommerceProduct(
+                name=product_data.get('name', 'Product'),
+                sku=product_data.get('sku', ''),
+                regular_price=product_data.get('regular_price', '0.00'),
+                sale_price=product_data.get('sale_price', ''),
+                short_description=product_data.get('short_description', ''),
+                images=product_data.get('image', ''),
+                type='variable',
+                attribute_1_name='Size',
+                attribute_1_values='|'.join(data['sizes']),
+                attribute_1_visible='1',
+                attribute_1_global='0'
+            )
             
             # Add the parent product
             products_with_variations.append(base_product)
             
             # Create variations for each size
             for size in data['sizes']:
-                variation = type('Product', (), {
-                    'name': f"{product_data.get('name', 'Product')} - {size}",
-                    'sku': f"{product_data.get('sku', '')}-{size}",
-                    'regular_price': product_data.get('regular_price', '0.00'),
-                    'sale_price': product_data.get('sale_price', ''),
-                    'short_description': product_data.get('short_description', ''),
-                    'images': product_data.get('image', ''),
-                    'type': 'variation',
-                    'parent_sku': product_data.get('sku', ''),
-                    'attribute_1_name': 'Size',
-                    'attribute_1_values': size,
-                    'attribute_1_visible': '1',
-                    'attribute_1_global': '0'
-                })
+                variation = WooCommerceProduct(
+                    name=f"{product_data.get('name', 'Product')} - {size}",
+                    sku=f"{product_data.get('sku', '')}-{size}",
+                    regular_price=product_data.get('regular_price', '0.00'),
+                    sale_price=product_data.get('sale_price', ''),
+                    short_description=product_data.get('short_description', ''),
+                    images=product_data.get('image', ''),
+                    type='variation',
+                    parent=product_data.get('sku', ''),
+                    attribute_1_name='Size',
+                    attribute_1_values=size,
+                    attribute_1_visible='1',
+                    attribute_1_global='0'
+                )
                 products_with_variations.append(variation)
         
         if not products_with_variations:
+            error_msg = 'No valid products to export'
+            logger.error(error_msg)
             return jsonify({
                 'success': False,
-                'error': 'No valid products to export'
+                'error': error_msg
             }), 400
         
         # Generate a unique filename for the CSV
@@ -246,13 +289,30 @@ def generate_csv():
         csv_filename = f"woocommerce_products_{timestamp}.csv"
         csv_path = os.path.join(app.config['UPLOAD_FOLDER'], csv_filename)
         
+        logger.info(f"Saving {len(products_with_variations)} products to {csv_path}")
+        
+        # Ensure upload directory exists
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        
         # Save products to CSV
         WooCommerceCSVExporter.save_to_csv(products_with_variations, csv_path)
-        logger.info(f"Saved {len(products_with_variations)} products to {csv_path}")
+        
+        if not os.path.exists(csv_path):
+            error_msg = f"Failed to save CSV file at {csv_path}"
+            logger.error(error_msg)
+            return jsonify({
+                'success': False,
+                'error': error_msg
+            }), 500
+            
+        logger.info(f"Successfully saved {len(products_with_variations)} products to {csv_path}")
+        
+        download_url = f'/download/{csv_filename}'
+        logger.info(f"Generated download URL: {download_url}")
         
         return jsonify({
             'success': True,
-            'download_url': f'/download/{csv_filename}'
+            'download_url': download_url
         })
         
     except Exception as e:
@@ -266,39 +326,107 @@ def generate_csv():
 @app.route('/download/<filename>')
 def download(filename):
     try:
+        logger.info(f"Received download request for file: {filename}")
+        
         # Ensure the filename is safe and doesn't contain any directory traversal
         safe_filename = os.path.basename(filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], safe_filename)
-        logger.info(f"Attempting to download file: {filepath}")
-        
-        if not os.path.exists(filepath):
-            logger.error(f"File not found: {filepath}")
-            return "File not found", 404
+        if safe_filename != filename:
+            logger.warning(f"Filename sanitized from '{filename}' to '{safe_filename}'")
             
-        logger.info(f"Sending file: {filepath}")
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], safe_filename)
+        logger.info(f"Resolved file path: {filepath}")
         
+        # Verify file exists and is accessible
+        if not os.path.exists(filepath):
+            error_msg = f"File not found: {filepath}"
+            logger.error(error_msg)
+            return jsonify({
+                'success': False,
+                'error': 'File not found',
+                'path': filepath
+            }), 404
+            
+        # Verify it's a file (not a directory)
+        if not os.path.isfile(filepath):
+            error_msg = f"Path is not a file: {filepath}"
+            logger.error(error_msg)
+            return jsonify({
+                'success': False,
+                'error': 'Invalid file path',
+                'path': filepath
+            }), 400
+            
+        # Verify file size
+        file_size = os.path.getsize(filepath)
+        logger.info(f"File size: {file_size} bytes")
+        
+        if file_size == 0:
+            error_msg = f"File is empty: {filepath}"
+            logger.error(error_msg)
+            return jsonify({
+                'success': False,
+                'error': 'File is empty',
+                'path': filepath
+            }), 400
+            
         # Generate a friendly download filename with timestamp
         download_filename = f'woocommerce_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        logger.info(f"Serving file as: {download_filename}")
         
-        # Send the file with proper MIME type and headers
-        response = send_file(
-            filepath,
-            as_attachment=True,
-            download_name=download_filename,
-            mimetype='text/csv'
-        )
-        
-        # Set additional headers to ensure proper file download
-        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
-        
-        logger.info(f"File sent successfully: {filepath}")
-        return response
+        # Prepare response with appropriate headers
+        try:
+            response = send_file(
+                filepath,
+                as_attachment=True,
+                download_name=download_filename,
+                mimetype='text/csv',
+                etag=True,
+                last_modified=datetime.now(),
+                max_age=0  # Prevent caching
+            )
+            
+            # Set additional headers to ensure proper file download
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+            response.headers['Content-Length'] = file_size
+            
+            logger.info(f"Successfully prepared file for download: {filepath} ({file_size} bytes)")
+            return response
+            
+        except Exception as e:
+            error_msg = f"Error preparing file for download: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': 'Error preparing file for download',
+                'details': str(e)
+            }), 500
+            
     except Exception as e:
-        logger.error(f"Error in download route: {str(e)}", exc_info=True)
-        return f"Error downloading file: {str(e)}", 500
+        error_msg = f"Error in download route: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'details': str(e) if app.debug else 'An error occurred while processing your request'
+        }), 500
 
 if __name__ == '__main__':
-    # Use port 5002 to avoid conflicts with other services
-    app.run(host='0.0.0.0', port=5002, debug=True)
+    import argparse
+    
+    # Set up argument parsing
+    parser = argparse.ArgumentParser(description='Run the WooCommerce Product Generator')
+    parser.add_argument('--port', type=int, default=5003, help='Port to run the server on')
+    args = parser.parse_args()
+    
+    # Use specified port or default to 5003
+    port = int(os.environ.get('PORT', args.port))
+    
+    # Ensure upload directory exists
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    
+    logger.info(f"Starting server on port {port}")
+    app.run(debug=True, host='0.0.0.0', port=port)

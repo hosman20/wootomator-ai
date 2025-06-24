@@ -102,9 +102,16 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('sizes', JSON.stringify(sizes));
         
         try {
-            const response = await fetch('/process', {
+            // Ensure API_BASE_URL is defined
+            const baseUrl = window.API_BASE_URL || '';
+            const apiUrl = `${baseUrl}/process`;
+            
+            console.log('Sending request to:', apiUrl);
+            
+            const response = await fetch(apiUrl, {
                 method: 'POST',
-                body: formData
+                body: formData,
+                credentials: 'same-origin' // Include cookies if any
             });
             
             if (!response.ok) {
@@ -249,8 +256,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     .map(checkbox => checkbox.value)
             }));
             
-            // Send request to generate CSV
-            const response = await fetch('/generate_csv', {
+            console.log('Sending products to generate CSV:', productsWithSizes);
+            
+            // Ensure API_BASE_URL is defined
+            const baseUrl = window.API_BASE_URL || '';
+            const apiUrl = `${baseUrl}/generate_csv`;
+            
+            console.log('Sending request to generate CSV:', apiUrl);
+            
+            const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -258,22 +272,44 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify({
                     products: productsWithSizes,
                     sizes: Array.from(document.querySelectorAll('.size-checkbox:checked')).map(cb => cb.value)
-                })
+                }),
+                credentials: 'same-origin' // Include cookies if any
             });
             
+            console.log('CSV generation response status:', response.status);
+            
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
+                const errorText = await response.text();
+                console.error('Error response:', errorText);
+                let errorData;
+                try {
+                    errorData = JSON.parse(errorText);
+                } catch (e) {
+                    throw new Error(`Failed to generate CSV: ${response.status} ${response.statusText}`);
+                }
                 throw new Error(errorData.error || 'Failed to generate CSV');
             }
             
             const data = await response.json();
+            console.log('CSV generation response data:', data);
             
             if (!data.success) {
                 throw new Error(data.error || 'Failed to generate CSV');
             }
             
-            // Trigger download
-            window.location.href = data.download_url;
+            if (!data.download_url) {
+                throw new Error('No download URL provided in response');
+            }
+            
+            console.log('Triggering download with URL:', data.download_url);
+            
+            // Create a hidden link and trigger the download
+            const link = document.createElement('a');
+            link.href = data.download_url;
+            link.download = ''; // Let the browser determine the filename
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
             
         } catch (error) {
             console.error('Error downloading CSV:', error);
