@@ -15,10 +15,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from PIL import Image
 import io
 import google.generativeai as genai
+from google.generativeai.client import configure
+from google.generativeai.generative_models import GenerativeModel
 from dotenv import load_dotenv
 
 # Configure logging
@@ -118,7 +121,7 @@ class WooCommerceProduct:
     attribute_1_name: str = 'Brand'  # Attribute name
     attribute_1_values: str = ''  # Attribute value(s)
     attribute_1_visible: str = '1'  # 1 = visible, 0 = not visible
-    attribute_1_global: str = '1'  # 1 = global, 0 = local
+    attribute_1_global: str = '0'  # 0 = not global (local to product), 1 = global
     
     def to_csv_dict(self) -> dict:
         """Convert to dictionary with proper CSV headers."""
@@ -175,8 +178,8 @@ class GeminiAPI:
     
     def __init__(self, api_key: str):
         """Initialize the Gemini API client."""
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        configure(api_key=api_key)
+        self.model = GenerativeModel('gemini-1.5-flash')
     
     def analyze_image(self, image_url: str) -> Dict[str, Any]:
         """Analyze product image and extract information using Gemini.
@@ -442,184 +445,194 @@ class WooCommerceCSVExporter:
     
     @staticmethod
     def save_to_csv(products: List[WooCommerceProduct], filename: str) -> bool:
-        """Save products to a CSV file in WooCommerce import format."""
-        logger.info(f"Starting CSV export to {filename}")
+        """Save products to a CSV file in WooCommerce import format.
         
+        Args:
+            products: List of WooCommerceProduct objects to save
+            filename: Output CSV filename
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
         if not products:
-            logger.warning("No products to export")
+            logger.warning("No products to save to CSV")
             return False
-        
+            
         try:
-            # Get field names from the first product's to_csv_dict method
-            sample_product = products[0]
-            sample_dict = sample_product.to_csv_dict()
-            fieldnames = list(sample_dict.keys())
-            logger.debug(f"CSV fieldnames: {fieldnames}")
-            
-            # Ensure the directory exists
-            os.makedirs(os.path.dirname(os.path.abspath(filename)) or '.', exist_ok=True)
-            
-            # Log the full path we're trying to write to
-            abs_path = os.path.abspath(filename)
-            logger.info(f"Writing CSV to: {abs_path}")
+            # Ensure the output directory exists
+            output_dir = os.path.dirname(os.path.abspath(filename))
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+                
+            # Get field names from the first product
+            fieldnames = list(products[0].to_csv_dict().keys())
             
             with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
                 
-                for i, product in enumerate(products, 1):
-                    try:
-                        product_dict = product.to_csv_dict()
-                        logger.debug(f"Writing product {i}/{len(products)}: {product_dict.get('Name', 'Unnamed')}")
-                        writer.writerow(product_dict)
-                    except Exception as e:
-                        logger.error(f"Error writing product {i} to CSV: {str(e)}")
-                        continue
+                for product in products:
+                    writer.writerow(product.to_csv_dict())
             
             # Verify the file was created and has content
             if os.path.exists(filename):
                 file_size = os.path.getsize(filename)
                 if file_size > 0:
-                    logger.info(f"Successfully exported {len(products)} products to {filename} (size: {file_size} bytes)")
+                    logger.info(f"Successfully saved {len(products)} products to {filename} (size: {file_size} bytes)")
                     return True
                 else:
-                    logger.error(f"CSV file was created but is empty: {filename}")
+                    logger.error(f"Failed to write to {filename}: file is empty")
                     return False
             else:
-                logger.error(f"CSV file was not created: {filename}")
+                logger.error(f"Failed to create file: {filename}")
                 return False
-            
-        except PermissionError as e:
-            logger.error(f"Permission denied when writing to {filename}: {str(e)}")
-            return False
+                
         except Exception as e:
-            logger.error(f"Error saving CSV file: {str(e)}", exc_info=True)
+            logger.error(f"Error saving products to {filename}: {str(e)}")
             return False
-
-def process_image_urls(image_urls: List[str], api_key: str) -> List[WooCommerceProduct]:
-    """Process a list of image URLs and return WooCommerce products."""
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
-    
-    logger.info(f"Starting to process {len(image_urls)} image URLs")
-    
-    # Initialize the Gemini API client
+        
+def _process_single_image(url: str, api_key: str, sizes: List[str]) -> List[WooCommerceProduct]:
+    """Process a single image URL and return a list of WooCommerce products."""
     gemini = GeminiAPI(api_key)
-    
     products = []
-    for i, url in enumerate(image_urls, 1):
-        try:
-            logger.info(f"Processing URL {i}/{len(image_urls)}: {url}")
-            
-            # Analyze the image with Gemini
-            logger.debug(f"Sending request to Gemini API for URL: {url}")
-            product_data = gemini.analyze_image(url)
-            logger.debug(f"Received response from Gemini API: {product_data}")
-            
-            # Calculate sale price
-            original_price = float(product_data.get('original_price', 0))
-            sale_price = WooCommerceCSVExporter.calculate_sale_price(original_price)
-            
-            logger.info(f"Creating product: {product_data.get('product_name', 'Unnamed Product')} "
-                      f"(Regular: ${original_price:.2f}, Sale: ${sale_price:.2f})")
-            
-            # Create a WooCommerce product
-            product = WooCommerceProduct()
-            
-            # Map extracted data to product fields
-            product.id = f'wc-{int(time.time())}-{i}'
-            product.sku = f'WC-{int(time.time())}-{i}'
-            product.name = product_data.get('product_name', f'Product {i+1}')
-            product.short_description = product_data.get('short_description', '')
-            
-            # Handle description - clean up and remove pricing/source information
-            detailed_desc = product_data.get('detailed_description', [])
-            
-            # Filter out lines containing pricing/source information
-            if isinstance(detailed_desc, list):
-                # Only keep lines that are part of the product details section
-                in_product_details = False
-                cleaned_desc = []
-                
-                for item in detailed_desc:
-                    # Look for the PRODUCT DETAILS section
-                    if 'PRODUCT DETAILS:' in item:
-                        in_product_details = True
-                        cleaned_desc.append(item)
-                        continue
-                        
-                    # If we're in the product details section, include the line
-                    if in_product_details:
-                        # Skip empty lines at the start of product details
-                        if not item.strip() and not cleaned_desc:
-                            continue
-                        cleaned_desc.append(item)
-                
-                # If we found product details, use them; otherwise use the short description
-                if cleaned_desc:
-                    product.description = '\n'.join([f'<li>{item}</li>' for item in cleaned_desc])
-                else:
-                    product.description = f'<p>{product_data.get("short_description", "")}</p>'
-            else:
-                # If it's not a list, try to clean it up as a string
-                desc_str = str(detailed_desc)
-                # Look for the PRODUCT DETAILS section
-                if 'PRODUCT DETAILS:' in desc_str:
-                    product.description = desc_str.split('PRODUCT DETAILS:')[-1].strip()
-                    # Convert to list of lines and back to string to ensure consistent formatting
-                    lines = [line.strip() for line in product.description.split('\n') if line.strip()]
-                    product.description = '\n'.join([f'<li>{line}</li>' for line in lines])
-                else:
-                    product.description = f'<p>{product_data.get("short_description", "")}</p>'
-            
-            # Set prices
-            product.regular_price = f'{original_price:.2f}'
-            product.sale_price = f'{sale_price:.2f}'
-            
-            # Set sale start date (no end date)
-            now = datetime.now()
-            product.date_sale_price_starts = now.strftime('%Y-%m-%d')
-            product.date_sale_price_ends = ''  # Empty string means no end date
-            
-            # Set categories and brand
-            categories = product_data.get('categories', ['Uncategorized'])
-            if isinstance(categories, str):
-                product.categories = categories
-            else:
-                product.categories = ','.join(categories)
-                
-            brand = product_data.get('brand', '')
-            product.brands = brand
-            product.attribute_1_values = brand
-            
-            # Set image
-            product.images = url
-            
-            # Set required fields
-            product.in_stock = '1'
-            product.stock = '100'
-            product.tax_status = 'taxable'
-            product.visibility = 'visible'
-            product.published = '1'
-            
-            products.append(product)
-            logger.info(f"Successfully created product: {product.name}")
-            
-        except Exception as e:
-            logger.error(f"Error processing URL {url}: {str(e)}", exc_info=True)
-            continue
     
-    logger.info(f"Successfully processed {len(products)}/{len(image_urls)} products")
+    try:
+        logger.info(f"Processing image: {url}")
+        
+        # Analyze the image
+        product_data = gemini.analyze_image(url)
+        
+        # Create base product
+        base_product = WooCommerceProduct()
+        product_name = product_data.get('product_name', 'Unnamed Product')
+        base_product.name = product_name
+        base_sku = product_data.get('sku', f'PROD-{int(time.time())}')
+        base_product.sku = base_sku
+        
+        # Handle price calculation
+        try:
+            original_price = float(product_data.get('original_price', 0))
+            sale_price = max(
+                original_price * (1 - DISCOUNT_PERCENTAGE),
+                MINIMUM_SALE_PRICE
+            )
+            base_product.regular_price = f"{original_price:.2f}"
+            base_product.sale_price = f"{sale_price:.2f}"
+        except (ValueError, TypeError) as e:
+            logger.error(f"Invalid price data: {e}")
+            base_product.regular_price = "0.00"
+            base_product.sale_price = str(MINIMUM_SALE_PRICE)
+        
+        # Set product details
+        base_product.short_description = product_data.get('short_description', '')
+        base_product.description = product_data.get('description', '')
+        base_product.images = url
+        
+        # Set brand as an attribute
+        if 'brand' in product_data:
+            base_product.attribute_1_name = 'Brand'
+            base_product.attribute_1_values = product_data['brand']
+            base_product.attribute_1_visible = '1'
+            base_product.attribute_1_global = '0'  # Local to this product
+        
+        if sizes:
+            # Create variable product
+            base_product.type = 'variable'
+            base_product.attribute_1_name = 'Size'
+            base_product.attribute_1_values = ','.join(sizes)
+            base_product.attribute_1_visible = '1'
+            base_product.attribute_1_global = '1'  # Global attribute
+            
+            # Add the base product
+            products.append(base_product)
+            
+            # Create variations for each size
+            for size in sizes:
+                variation = WooCommerceProduct()
+                variation.type = 'variation'
+                variation.parent = base_sku
+                variation.name = f"{product_name} - {size}"
+                variation.regular_price = base_product.regular_price
+                variation.sale_price = base_product.sale_price
+                variation.sku = f"{base_sku}-{size}"
+                variation.images = url
+                variation.attribute_1_name = 'Size'
+                variation.attribute_1_values = size
+                variation.attribute_1_visible = '1'
+                variation.attribute_1_global = '0'  # Local to this product
+                variation.in_stock = '1'
+                variation.stock = '10'  # Default stock quantity
+                products.append(variation)
+        else:
+            # Simple product
+            products.append(base_product)
+            
+    except Exception as e:
+        logger.error(f"Error processing image {url}: {str(e)}", exc_info=True)
+    
     return products
 
-def read_urls_from_file(file_path: str) -> List[str]:
-    """Read image URLs from a text file."""
-    try:
-        with open(file_path, 'r') as f:
-            return [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        logger.error(f"Error reading URLs from file: {str(e)}")
+def process_image_urls(image_urls: List[str], api_key: str, sizes: Optional[List[str]] = None, max_workers: int = 4) -> List[WooCommerceProduct]:
+    """Process a list of image URLs in parallel and return WooCommerce products.
+    
+    Args:
+        image_urls: List of image URLs to process
+        api_key: Gemini API key
+        sizes: Optional list of sizes to generate variations for (e.g., ['S', 'M', 'L', 'XL'])
+        max_workers: Maximum number of concurrent workers for parallel processing
+        
+    Returns:
+        List of WooCommerceProduct objects with size variations if sizes are provided
+    """
+    if not image_urls:
         return []
+    
+    if sizes is None:
+        sizes = []
+    
+    all_products = []
+    
+    # Process images in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Create a future for each URL
+        future_to_url = {
+            executor.submit(_process_single_image, url, api_key, sizes): url 
+            for url in image_urls
+        }
+        
+        # Process results as they complete
+        for future in as_completed(future_to_url):
+            url = future_to_url[future]
+            try:
+                products = future.result()
+                if products:
+                    all_products.extend(products)
+            except Exception as e:
+                logger.error(f"Error processing URL {url}: {str(e)}", exc_info=True)
+    
+    return all_products
+
+def read_urls_from_file(filename: str) -> List[str]:
+    """Read image URLs from a text file.
+    
+    Args:
+        filename: Path to the file containing URLs (one per line)
+        
+    Returns:
+        List of URLs as strings
+    """
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            # Read all non-empty lines and strip whitespace
+            urls = [line.strip() for line in f if line.strip()]
+            logger.info(f"Read {len(urls)} URLs from {filename}")
+            return urls
+    except FileNotFoundError:
+        logger.error(f"File not found: {filename}")
+        raise
+    except Exception as e:
+        logger.error(f"Error reading URLs from file {filename}: {str(e)}")
+        raise
 
 def main():
     """Main entry point for the script."""

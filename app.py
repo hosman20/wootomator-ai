@@ -9,6 +9,8 @@ from wootomator import process_image_urls, WooCommerceCSVExporter
 from dotenv import load_dotenv
 import logging
 from datetime import datetime
+import copy
+import json
 
 # Load environment variables
 load_dotenv(override=True)
@@ -46,6 +48,8 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 ALLOWED_EXTENSIONS = {'txt'}
 
 def allowed_file(filename):
+    if not filename:
+        return False
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -62,8 +66,10 @@ def process():
     if 'urls' not in request.form and 'file' not in request.files:
         error_msg = 'No URLs or file provided in request'
         logger.error(error_msg)
-        flash(error_msg, 'error')
-        return redirect(url_for('index'))
+        return jsonify({
+            'success': False,
+            'error': error_msg
+        }), 400
     
     # Get URLs from form or file
     urls = []
@@ -80,7 +86,8 @@ def process():
         
         if file.filename != '':
             if file and allowed_file(file.filename):
-                filename = secure_filename(file.filename)
+                # Ensure file.filename is not None before passing to secure_filename
+                filename = secure_filename(file.filename) if file.filename else 'uploaded_file.txt'
                 filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 logger.debug(f"Saving uploaded file to: {filepath}")
                 
@@ -91,47 +98,41 @@ def process():
                     # Read URLs from file
                     with open(filepath, 'r') as f:
                         file_urls = [line.strip() for line in f if line.strip()]
-                        logger.info(f"Read {len(file_urls)} URLs from file")
-                        urls.extend(file_urls)
-                    
-                    # Clean up the uploaded file
-                    os.remove(filepath)
-                    logger.debug(f"Removed temporary file: {filepath}")
+                    urls.extend(file_urls)
+                    logger.info(f"Read {len(file_urls)} URLs from file")
                     
                 except Exception as e:
-                    error_msg = f"Error processing uploaded file: {str(e)}"
-                    logger.error(error_msg, exc_info=True)
+                    error_msg = f'Error processing file: {str(e)}'
+                    logger.error(error_msg)
                     return jsonify({
                         'success': False,
                         'error': error_msg
                     }), 400
     
     if not urls:
-        error_msg = 'No valid URLs provided after processing form and file uploads'
+        error_msg = 'No valid URLs found in the request'
         logger.error(error_msg)
         return jsonify({
             'success': False,
             'error': error_msg
         }), 400
     
-    logger.info(f"Processing {len(urls)} image URLs")
+    # Get API key from environment
+    api_key = os.getenv('GEMINI_API_KEY')
+    if not api_key:
+        error_msg = 'Gemini API key not configured. Please set GEMINI_API_KEY in your environment variables.'
+        logger.error(error_msg)
+        return jsonify({
+            'success': False,
+            'error': error_msg
+        }), 500
     
     try:
-        # Get API key from environment
-        api_key = os.getenv('GEMINI_API_KEY')
-        if not api_key:
-            error_msg = 'GEMINI_API_KEY environment variable is not set'
-            logger.error(error_msg)
-            return jsonify({
-                'success': False,
-                'error': error_msg
-            }), 500
-            
-        logger.debug(f"Using API key: {api_key[:5]}...{api_key[-3:] if api_key else ''}")
+        # Process the image URLs with Gemini API
+        logger.info(f"Starting to process {len(urls)} URLs with Gemini API")
         
-        # Process the URLs
-        logger.info("Starting to process image URLs with Gemini API")
-        products = process_image_urls(urls, api_key)
+        # Process all products (without size variations)
+        products = process_image_urls(urls, api_key, [])
         
         if not products:
             error_msg = 'No products were generated. Please check the image URLs and try again.'
@@ -141,66 +142,121 @@ def process():
                 'error': error_msg
             }), 400
         
-        logger.info(f"Successfully processed {len(products)} products")
-        
-        # Generate a unique filename for the CSV
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_filename = f'woocommerce_export_{timestamp}.csv'
-        output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
-        
-        logger.info(f"Saving {len(products)} products to CSV: {output_path}")
-        
-        # Save to CSV
-        csv_saved = WooCommerceCSVExporter.save_to_csv(products, output_path)
-        
-        if not csv_saved:
-            error_msg = f'Failed to save products to CSV: {output_path}'
-            logger.error(error_msg)
-            return jsonify({
-                'success': False,
-                'error': error_msg
-            }), 500
-            
-        logger.info(f"Successfully saved CSV to {output_path}")
-        
-        # Verify the file exists and has content
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            error_msg = f'CSV file was created but is empty: {output_path}'
-            logger.error(error_msg)
-            return jsonify({
-                'success': False,
-                'error': error_msg
-            }), 500
-        
-        # Prepare product data for the web interface
-        logger.debug("Preparing product data for web interface")
-        web_products = []
-        for p in products:
-            web_products.append({
+        # Prepare response with product data
+        response_data = {
+            'success': True,
+            'products': [{
                 'name': p.name,
+                'sku': p.sku,
                 'regular_price': p.regular_price,
                 'sale_price': p.sale_price,
                 'short_description': p.short_description,
-                'sku': p.sku,
-                'image': p.images.split(',')[0] if p.images else ''  # Just show first image in the list
-            })
-        
-        download_url = url_for('download', filename=output_filename, _external=True)
-        logger.info(f"Generated download URL: {download_url}")
-        
-        # Return response with download URL and product data
-        response_data = {
-            'success': True,
-            'download_url': download_url,
-            'products': web_products,
-            'csv_path': output_path
+                'image': p.images.split(',')[0] if hasattr(p, 'images') and p.images else ''
+            } for p in products if hasattr(p, 'name')]
         }
         
-        logger.info("Successfully completed request processing")
+        logger.info(f"Successfully processed {len(products)} products")
         return jsonify(response_data)
-        
+            
     except Exception as e:
         error_msg = f"Error processing request: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': error_msg
+        }), 500
+
+@app.route('/generate_csv', methods=['POST'])
+def generate_csv():
+    logger.info("Processing request to /generate_csv endpoint")
+    
+    if not request.is_json:
+        return jsonify({
+            'success': False,
+            'error': 'Request must be JSON'
+        }), 400
+    
+    data = request.get_json()
+    
+    # Validate required fields
+    if 'products' not in data or not isinstance(data['products'], list):
+        return jsonify({
+            'success': False,
+            'error': 'Products data is required and must be an array'
+        }), 400
+    
+    if 'sizes' not in data or not isinstance(data['sizes'], list) or not data['sizes']:
+        return jsonify({
+            'success': False,
+            'error': 'At least one size must be selected'
+        }), 400
+    
+    try:
+        # Create product variations for each size
+        products_with_variations = []
+        
+        for product_data in data['products']:
+            if not isinstance(product_data, dict) or 'sku' not in product_data:
+                continue
+                
+            # Create a base product (parent)
+            base_product = type('Product', (), {
+                'name': product_data.get('name', 'Product'),
+                'sku': product_data.get('sku', ''),
+                'regular_price': product_data.get('regular_price', '0.00'),
+                'sale_price': product_data.get('sale_price', ''),
+                'short_description': product_data.get('short_description', ''),
+                'images': product_data.get('image', ''),
+                'type': 'variable',
+                'attribute_1_name': 'Size',
+                'attribute_1_values': '|'.join(data['sizes']),
+                'attribute_1_visible': '1',
+                'attribute_1_global': '0'
+            })
+            
+            # Add the parent product
+            products_with_variations.append(base_product)
+            
+            # Create variations for each size
+            for size in data['sizes']:
+                variation = type('Product', (), {
+                    'name': f"{product_data.get('name', 'Product')} - {size}",
+                    'sku': f"{product_data.get('sku', '')}-{size}",
+                    'regular_price': product_data.get('regular_price', '0.00'),
+                    'sale_price': product_data.get('sale_price', ''),
+                    'short_description': product_data.get('short_description', ''),
+                    'images': product_data.get('image', ''),
+                    'type': 'variation',
+                    'parent_sku': product_data.get('sku', ''),
+                    'attribute_1_name': 'Size',
+                    'attribute_1_values': size,
+                    'attribute_1_visible': '1',
+                    'attribute_1_global': '0'
+                })
+                products_with_variations.append(variation)
+        
+        if not products_with_variations:
+            return jsonify({
+                'success': False,
+                'error': 'No valid products to export'
+            }), 400
+        
+        # Generate a unique filename for the CSV
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_filename = f"woocommerce_products_{timestamp}.csv"
+        csv_path = os.path.join(app.config['UPLOAD_FOLDER'], csv_filename)
+        
+        # Save products to CSV
+        WooCommerceCSVExporter.save_to_csv(products_with_variations, csv_path)
+        logger.info(f"Saved {len(products_with_variations)} products to {csv_path}")
+        
+        return jsonify({
+            'success': True,
+            'download_url': f'/download/{csv_filename}'
+        })
+        
+    except Exception as e:
+        error_msg = f"Error generating CSV: {str(e)}"
         logger.error(error_msg, exc_info=True)
         return jsonify({
             'success': False,

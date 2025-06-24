@@ -32,6 +32,7 @@
 https://example.com/product2.jpg"></textarea>
                                 <div class="form-text">Each URL should be on a new line.</div>
                             </div>
+                            
                             <div class="d-grid">
                                 <button type="submit" class="btn btn-primary btn-lg">
                                     <i class="bi bi-magic me-2"></i>Generate Products
@@ -42,13 +43,39 @@ https://example.com/product2.jpg"></textarea>
                     
                     <div class="tab-pane fade" id="file-tab-pane" role="tabpanel">
                         <form id="fileForm" enctype="multipart/form-data">
-                            <div class="upload-area" id="dropZone">
-                                <i class="bi bi-cloud-arrow-up"></i>
-                                <h5>Drag & drop your file here</h5>
-                                <p class="text-muted">or click to browse</p>
-                                <input type="file" id="fileInput" class="d-none" accept=".txt">
-                                <div class="mt-2" id="fileName"></div>
+                            <div class="mb-3">
+                                <div class="upload-area" id="dropZone">
+                                    <i class="bi bi-cloud-arrow-up"></i>
+                                    <h5>Drag & drop your file here</h5>
+                                    <p class="text-muted">or click to browse</p>
+                                    <input type="file" id="fileInput" class="d-none" accept=".txt">
+                                    <div class="mt-2" id="fileName"></div>
+                                </div>
                             </div>
+                            
+                            <div class="mb-4">
+                                <label class="form-label">Available Sizes:</label>
+                                <div class="d-flex flex-wrap gap-3">
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input size-checkbox" type="checkbox" id="file-size-s" value="S" checked>
+                                        <label class="form-check-label" for="file-size-s">S</label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input size-checkbox" type="checkbox" id="file-size-m" value="M" checked>
+                                        <label class="form-check-label" for="file-size-m">M</label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input size-checkbox" type="checkbox" id="file-size-l" value="L" checked>
+                                        <label class="form-check-label" for="file-size-l">L</label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input size-checkbox" type="checkbox" id="file-size-xl" value="XL" checked>
+                                        <label class="form-check-label" for="file-size-xl">XL</label>
+                                    </div>
+                                </div>
+                                <div class="form-text">Deselect any sizes that don't apply to these products</div>
+                            </div>
+                            
                             <div class="d-grid">
                                 <button type="submit" class="btn btn-primary btn-lg" id="processFileBtn" disabled>
                                     <i class="bi bi-magic me-2"></i>Generate Products
@@ -65,16 +92,80 @@ https://example.com/product2.jpg"></textarea>
                     <p class="mt-2">Processing your request. This may take a moment...</p>
                 </div>
                 
-                <div class="results" id="resultsSection">
+                <div class="results" id="resultsSection" style="display: none;">
                     <hr>
                     <div class="d-flex justify-content-between align-items-center mb-3">
                         <h3>Generated Products</h3>
-                        <a href="#" class="btn btn-success" id="downloadCsv">
-                            <i class="bi bi-download me-2"></i>Download CSV
-                        </a>
+                        <div>
+                            <button type="button" class="btn btn-outline-primary me-2" id="configureSizesBtn" disabled>
+                                <i class="bi bi-sliders me-1"></i>Configure Sizes
+                            </button>
+                            <a href="#" class="btn btn-success" id="downloadCsv" disabled>
+                                <i class="bi bi-download me-1"></i>Download CSV
+                            </a>
+                        </div>
                     </div>
-                    <div class="row" id="productsGrid">
-                        <!-- Products will be dynamically inserted here -->
+                    
+                    <!-- Size Configuration Panel (initially hidden) -->
+                    <div class="card mb-4" id="sizeConfigPanel" style="display: none;">
+                        <div class="card-header bg-light">
+                            <h5 class="mb-0">Configure Product Sizes</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">Available Sizes:</label>
+                                    <div class="d-flex flex-wrap gap-3">
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input size-checkbox" type="checkbox" id="size-s" value="S" checked>
+                                            <label class="form-check-label" for="size-s">S</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input size-checkbox" type="checkbox" id="size-m" value="M" checked>
+                                            <label class="form-check-label" for="size-m">M</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input size-checkbox" type="checkbox" id="size-l" value="L" checked>
+                                            <label class="form-check-label" for="size-l">L</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input size-checkbox" type="checkbox" id="size-xl" value="XL" checked>
+                                            <label class="form-check-label" for="size-xl">XL</label>
+                                        </div>
+                                    </div>
+                                    <div class="form-text mt-2">Select sizes to include for all products</div>
+                                </div>
+                                <div class="col-md-6 d-flex align-items-end">
+                                    <div>
+                                        <button type="button" class="btn btn-primary me-2" id="applySizesBtn">
+                                            <i class="bi bi-check-lg me-1"></i>Apply Sizes
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary" id="cancelSizesBtn">
+                                            <i class="bi bi-x-lg me-1"></i>Cancel
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover" id="productsTable">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Image</th>
+                                    <th>Product Name</th>
+                                    <th>Description</th>
+                                    <th>Price</th>
+                                    <th>Sale Price</th>
+                                    <th>SKU</th>
+                                    <th class="text-center">Sizes</th>
+                                    <th class="text-center">Toggle All</th>
+                                </tr>
+                            </thead>
+                            <tbody id="productsContainer">
+                                <!-- Products will be inserted here -->
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -102,176 +193,5 @@ https://example.com/product2.jpg"></textarea>
 {% endblock %}
 
 {% block scripts %}
-<script>
-$(document).ready(function() {
-    // Handle file selection
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
-    const fileName = document.getElementById('fileName');
-    const processFileBtn = document.getElementById('processFileBtn');
-    
-    // Click handler for drop zone
-    dropZone.addEventListener('click', () => fileInput.click());
-    
-    // Handle drag and drop
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, preventDefaults, false);
-    });
-    
-    function preventDefaults(e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
-    
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropZone.addEventListener(eventName, highlight, false);
-    });
-    
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, unhighlight, false);
-    });
-    
-    function highlight() {
-        dropZone.classList.add('border-primary');
-    }
-    
-    function unhighlight() {
-        dropZone.classList.remove('border-primary');
-    }
-    
-    // Handle file drop
-    dropZone.addEventListener('drop', handleDrop, false);
-    
-    function handleDrop(e) {
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        handleFiles(files);
-    }
-    
-    // Handle file input change
-    fileInput.addEventListener('change', function() {
-        handleFiles(this.files);
-    });
-    
-    function handleFiles(files) {
-        if (files.length > 0) {
-            const file = files[0];
-            if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
-                fileName.textContent = `Selected file: ${file.name}`;
-                processFileBtn.disabled = false;
-            } else {
-                alert('Please upload a .txt file');
-                fileInput.value = '';
-                fileName.textContent = '';
-                processFileBtn.disabled = true;
-            }
-        }
-    }
-    
-    // Handle form submission
-    $('#urlForm, #fileForm').on('submit', function(e) {
-        e.preventDefault();
-        const formData = new FormData();
-        
-        if ($(this).attr('id') === 'urlForm') {
-            const urls = $('#imageUrls').val().trim();
-            if (!urls) {
-                alert('Please enter at least one URL');
-                return;
-            }
-            formData.append('urls', urls);
-        } else {
-            const fileInput = document.getElementById('fileInput');
-            if (fileInput.files.length === 0) {
-                alert('Please select a file');
-                return;
-            }
-            formData.append('file', fileInput.files[0]);
-        }
-        
-        // Show processing spinner
-        $('#processingSpinner').show();
-        $('form').hide();
-        
-        // Send AJAX request
-        $.ajax({
-            url: '/process',
-            type: 'POST',
-            data: formData,
-            processData: false,
-            contentType: false,
-            success: function(response) {
-                if (response.success) {
-                    // Show results
-                    const productsGrid = $('#productsGrid');
-                    productsGrid.empty();
-                    
-                    // Add products to the grid
-                    response.products.forEach(product => {
-                        if (product.name) {  // Only add if product has a name
-                            const productHtml = `
-                                <div class="col-lg-6 mb-4">
-                                    <div class="card product-card h-100">
-                                        <div class="row g-0">
-                                            <div class="col-md-4">
-                                                <img src="${product.image}" class="img-fluid rounded-start product-image" alt="${product.name}" onerror="this.src='https://via.placeholder.com/300x300?text=Image+Not+Available'">
-                                            </div>
-                                            <div class="col-md-8">
-                                                <div class="card-body">
-                                                    <h5 class="card-title">${product.name || 'Unnamed Product'}</h5>
-                                                    <div class="product-details">
-                                                        <p class="mb-1"><strong>Price:</strong> $${product.regular_price || '0.00'}</p>
-                                                        <p class="mb-1"><strong>Sale Price:</strong> $${product.sale_price || '0.00'}</p>
-                                                        <p class="mb-1 text-muted">${product.short_description || 'No description available'}</p>
-                                                        <p class="mb-1"><small class="text-muted">SKU: ${product.sku || 'N/A'}</small></p>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                            productsGrid.append(productHtml);
-                        }
-                    });
-                    
-                    // Set download URL and add click handler
-                    const downloadBtn = $('#downloadCsv');
-                    downloadBtn.attr('href', response.download_url);
-                    
-                    // Add click handler to track downloads
-                    downloadBtn.off('click').on('click', function(e) {
-                        console.log('Download button clicked');
-                        // Let the default download action proceed
-                    });
-                    
-                    // Show results section
-                    $('#resultsSection').show();
-                    
-                    // Scroll to results
-                    $('html, body').animate({
-                        scrollTop: $('#resultsSection').offset().top - 100
-                    }, 500);
-                } else {
-                    alert('Error: ' + (response.error || 'Unknown error occurred'));
-                }
-            },
-            error: function(xhr, status, error) {
-                alert('Error: ' + (xhr.responseJSON?.error || 'Failed to process request'));
-            },
-            complete: function() {
-                // Hide processing spinner
-                $('#processingSpinner').hide();
-                $('form').show();
-            }
-        });
-    });
-    
-    // Initialize tooltips
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
-});
-</script>
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
 {% endblock %}
