@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="card-title text-center mb-4">WooCommerce Product Generator</h2>
+                <p class="text-muted text-center mb-4">
+                    Upload product images or enter image URLs to generate WooCommerce product listings
+                </p>
+                
+                <ul class="nav nav-tabs mb-4" id="uploadTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="url-tab" data-bs-toggle="tab" data-bs-target="#url-tab-pane" type="button" role="tab">
+                            <i class="bi bi-link-45deg me-2"></i>Enter URLs
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="file-tab" data-bs-toggle="tab" data-bs-target="#file-tab-pane" type="button" role="tab">
+                            <i class="bi bi-upload me-2"></i>Upload File
+                        </button>
+                    </li>
+                </ul>
+                
+                <div class="tab-content" id="uploadTabsContent">
+                    <div class="tab-pane fade show active" id="url-tab-pane" role="tabpanel">
+                        <form id="urlForm">
+                            <div class="mb-3">
+                                <label for="imageUrls" class="form-label">Enter image URLs (one per line):</label>
+                                <textarea class="form-control" id="imageUrls" rows="6" placeholder="https://example.com/product1.jpg
+https://example.com/product2.jpg"></textarea>
+                                <div class="form-text">Each URL should be on a new line.</div>
+                            </div>
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-primary btn-lg">
+                                    <i class="bi bi-magic me-2"></i>Generate Products
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                    
+                    <div class="tab-pane fade" id="file-tab-pane" role="tabpanel">
+                        <form id="fileForm" enctype="multipart/form-data">
+                            <div class="upload-area" id="dropZone">
+                                <i class="bi bi-cloud-arrow-up"></i>
+                                <h5>Drag & drop your file here</h5>
+                                <p class="text-muted">or click to browse</p>
+                                <input type="file" id="fileInput" class="d-none" accept=".txt">
+                                <div class="mt-2" id="fileName"></div>
+                            </div>
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-primary btn-lg" id="processFileBtn" disabled>
+                                    <i class="bi bi-magic me-2"></i>Generate Products
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                
+                <div class="text-center processing-spinner" id="processingSpinner">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Processing your request. This may take a moment...</p>
+                </div>
+                
+                <div class="results" id="resultsSection">
+                    <hr>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h3>Generated Products</h3>
+                        <a href="#" class="btn btn-success" id="downloadCsv">
+                            <i class="bi bi-download me-2"></i>Download CSV
+                        </a>
+                    </div>
+                    <div class="row" id="productsGrid">
+                        <!-- Products will be dynamically inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-body">
+                <h5 class="card-title">How it works</h5>
+                <ol>
+                    <li>Upload product images or provide image URLs</li>
+                    <li>Our AI will analyze the images and extract product details</li>
+                    <li>Download the generated WooCommerce CSV file</li>
+                    <li>Import the CSV into your WooCommerce store</li>
+                </ol>
+                <p class="text-muted mb-0">
+                    <small>
+                        <i class="bi bi-info-circle me-1"></i>
+                        Note: The AI will automatically apply an 80% discount with a minimum price of $120.
+                    </small>
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    // Handle file selection
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileName = document.getElementById('fileName');
+    const processFileBtn = document.getElementById('processFileBtn');
+    
+    // Click handler for drop zone
+    dropZone.addEventListener('click', () => fileInput.click());
+    
+    // Handle drag and drop
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+    });
+    
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, highlight, false);
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, unhighlight, false);
+    });
+    
+    function highlight() {
+        dropZone.classList.add('border-primary');
+    }
+    
+    function unhighlight() {
+        dropZone.classList.remove('border-primary');
+    }
+    
+    // Handle file drop
+    dropZone.addEventListener('drop', handleDrop, false);
+    
+    function handleDrop(e) {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        handleFiles(files);
+    }
+    
+    // Handle file input change
+    fileInput.addEventListener('change', function() {
+        handleFiles(this.files);
+    });
+    
+    function handleFiles(files) {
+        if (files.length > 0) {
+            const file = files[0];
+            if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
+                fileName.textContent = `Selected file: ${file.name}`;
+                processFileBtn.disabled = false;
+            } else {
+                alert('Please upload a .txt file');
+                fileInput.value = '';
+                fileName.textContent = '';
+                processFileBtn.disabled = true;
+            }
+        }
+    }
+    
+    // Handle form submission
+    $('#urlForm, #fileForm').on('submit', function(e) {
+        e.preventDefault();
+        const formData = new FormData();
+        
+        if ($(this).attr('id') === 'urlForm') {
+            const urls = $('#imageUrls').val().trim();
+            if (!urls) {
+                alert('Please enter at least one URL');
+                return;
+            }
+            formData.append('urls', urls);
+        } else {
+            const fileInput = document.getElementById('fileInput');
+            if (fileInput.files.length === 0) {
+                alert('Please select a file');
+                return;
+            }
+            formData.append('file', fileInput.files[0]);
+        }
+        
+        // Show processing spinner
+        $('#processingSpinner').show();
+        $('form').hide();
+        
+        // Send AJAX request
+        $.ajax({
+            url: '/process',
+            type: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            success: function(response) {
+                if (response.success) {
+                    // Show results
+                    const productsGrid = $('#productsGrid');
+                    productsGrid.empty();
+                    
+                    // Add products to the grid
+                    response.products.forEach(product => {
+                        if (product.name) {  // Only add if product has a name
+                            const productHtml = `
+                                <div class="col-lg-6 mb-4">
+                                    <div class="card product-card h-100">
+                                        <div class="row g-0">
+                                            <div class="col-md-4">
+                                                <img src="${product.image}" class="img-fluid rounded-start product-image" alt="${product.name}" onerror="this.src='https://via.placeholder.com/300x300?text=Image+Not+Available'">
+                                            </div>
+                                            <div class="col-md-8">
+                                                <div class="card-body">
+                                                    <h5 class="card-title">${product.name || 'Unnamed Product'}</h5>
+                                                    <div class="product-details">
+                                                        <p class="mb-1"><strong>Price:</strong> $${product.regular_price || '0.00'}</p>
+                                                        <p class="mb-1"><strong>Sale Price:</strong> $${product.sale_price || '0.00'}</p>
+                                                        <p class="mb-1 text-muted">${product.short_description || 'No description available'}</p>
+                                                        <p class="mb-1"><small class="text-muted">SKU: ${product.sku || 'N/A'}</small></p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                            productsGrid.append(productHtml);
+                        }
+                    });
+                    
+                    // Set download URL and add click handler
+                    const downloadBtn = $('#downloadCsv');
+                    downloadBtn.attr('href', response.download_url);
+                    
+                    // Add click handler to track downloads
+                    downloadBtn.off('click').on('click', function(e) {
+                        console.log('Download button clicked');
+                        // Let the default download action proceed
+                    });
+                    
+                    // Show results section
+                    $('#resultsSection').show();
+                    
+                    // Scroll to results
+                    $('html, body').animate({
+                        scrollTop: $('#resultsSection').offset().top - 100
+                    }, 500);
+                } else {
+                    alert('Error: ' + (response.error || 'Unknown error occurred'));
+                }
+            },
+            error: function(xhr, status, error) {
+                alert('Error: ' + (xhr.responseJSON?.error || 'Failed to process request'));
+            },
+            complete: function() {
+                // Hide processing spinner
+                $('#processingSpinner').hide();
+                $('form').show();
+            }
+        });
+    });
+    
+    // Initialize tooltips
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+});
+</script>
+{% endblock %}
